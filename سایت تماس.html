@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="fa">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>تماس دو نفره ساده (PeerJS)</title>
+  <style>
+    body{font-family:sans-serif;background:#0b0f14;color:#e6eef6;display:flex;flex-direction:column;align-items:center;gap:12px;padding:18px}
+    .videos{display:flex;gap:8px;flex-wrap:wrap}
+    video{width:360px;height:270px;background:#000;border-radius:8px;object-fit:cover}
+    input,button{padding:8px;border-radius:6px;border:0;font-size:1rem}
+    .info{background:#071023;padding:10px;border-radius:8px}
+    a.link{color:#7bd389}
+  </style>
+</head>
+<body>
+  <h2>تماس دو نفره — فقط با یک لینک</h2>
+
+  <div class="info">
+    <div>شناسهٔ شما: <span id="myId">درحال اتصال...</span></div>
+    <div>لینکی که به دوستت بده (کپی کن):<br>
+      <input id="shareLink" style="width:420px" readonly>
+      <button id="copyBtn">کپی</button>
+    </div>
+  </div>
+
+  <div style="display:flex;gap:8px;align-items:center">
+    <input id="remoteIdInput" placeholder="شناسه یا پارامتر ?callTo=">
+    <button id="callBtn">فراخوانی (Call)</button>
+    <button id="hangBtn" disabled>قطع</button>
+  </div>
+
+  <div class="videos">
+    <div>
+      <div>Local</div>
+      <video id="localVid" autoplay muted playsinline></video>
+    </div>
+    <div>
+      <div>Remote</div>
+      <video id="remoteVid" autoplay playsinline></video>
+    </div>
+  </div>
+
+  <!-- PeerJS (CDN) -->
+  <script src="https://unpkg.com/peerjs@1.4.7/dist/peerjs.min.js"></script>
+
+  <script>
+  (async function(){
+    // اگر صفحه با پارامتر ?callTo=ID باز شد، آن را می‌خوانیم
+    const urlParams = new URLSearchParams(location.search);
+    const autoCallTo = urlParams.get('callTo');
+
+    const myIdEl = document.getElementById('myId');
+    const shareLinkEl = document.getElementById('shareLink');
+    const copyBtn = document.getElementById('copyBtn');
+    const remoteIdInput = document.getElementById('remoteIdInput');
+    const callBtn = document.getElementById('callBtn');
+    const hangBtn = document.getElementById('hangBtn');
+    const localVid = document.getElementById('localVid');
+    const remoteVid = document.getElementById('remoteVid');
+
+    let localStream = null;
+    let currentCall = null;
+
+    // ساخت Peer (بدون پارامتر id تا سرور یه id اختصاص بده)
+    const peer = new Peer(); // به PeerServer Cloud متصل می‌شود اگر host/key تعریف نشود. :contentReference[oaicite:1]{index=1}
+
+    peer.on('open', id => {
+      myIdEl.textContent = id;
+      // لینک قابل ارسال (همین فایل با پارامتر callTo)
+      const link = location.origin + location.pathname + '?callTo=' + encodeURIComponent(id);
+      shareLinkEl.value = link;
+      remoteIdInput.value = '';
+      // اگر کاربر دوست داشت می‌تونیم خودکار مقدار remoteIdInput بذاریم برای راحتی
+      if (autoCallTo) {
+        // autoCallTo یعنی این صفحه هم خواسته با یک id تماس برقرار کنه (مثلاً وقتی لینک رو باز کردند)
+        remoteIdInput.value = autoCallTo;
+        // صبر کوتاه تا UI آپدیت شه بعد کال کن
+        setTimeout(()=> startCallTo(autoCallTo), 500);
+      }
+    });
+
+    peer.on('error', err => {
+      console.error('Peer error', err);
+      alert('خطا در PeerJS: ' + (err && err.message ? err.message : err));
+    });
+
+    // وقتی کسی به ما تماس می‌گیره، جواب میدیم
+    peer.on('call', async (call) => {
+      try {
+        if (!localStream) {
+          localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+          localVid.srcObject = localStream;
+        }
+        currentCall = call;
+        call.answer(localStream); // پاسخ با استریم محلی
+        setupCallHandlers(call);
+      } catch (e) {
+        console.error('خطا در جواب دادن به تماس:', e);
+        call.close();
+      }
+    });
+
+    async function ensureLocalStream(){
+      if (!localStream) {
+        localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+        localVid.srcObject = localStream;
+      }
+    }
+
+    function setupCallHandlers(call){
+      hangBtn.disabled = false;
+      call.on('stream', remoteStream => {
+        remoteVid.srcObject = remoteStream;
+      });
+      call.on('close', () => {
+        remoteVid.srcObject = null;
+        hangBtn.disabled = true;
+      });
+      call.on('error', err => {
+        console.warn('call error', err);
+      });
+      currentCall = call;
+    }
+
+    async function startCallTo(remoteId){
+      if (!remoteId) { alert('لطفاً شناسهٔ طرف مقابل را وارد کنید.'); return; }
+      try {
+        await ensureLocalStream();
+        const call = peer.call(remoteId, localStream);
+        if (!call) throw new Error('فراخوانی انجام نشد');
+        setupCallHandlers(call);
+      } catch (e) {
+        console.error('خطا در شروع تماس:', e);
+        alert('نمی‌توان تماس گرفت: ' + (e.message || e));
+      }
+    }
+
+    // دکمه‌ها
+    callBtn.onclick = () => startCallTo(remoteIdInput.value.trim());
+    hangBtn.onclick = () => {
+      if (currentCall) currentCall.close();
+      currentCall = null;
+      hangBtn.disabled = true;
+    };
+    copyBtn.onclick = () => {
+      shareLinkEl.select();
+      document.execCommand('copy');
+      copyBtn.textContent = 'کپی شد';
+      setTimeout(()=> copyBtn.textContent = 'کپی', 1200);
+    };
+
+    // clean up on unload
+    window.addEventListener('beforeunload', ()=> {
+      try { peer.destroy(); } catch(e){}
+      if (localStream) localStream.getTracks().forEach(t=>t.stop());
+    });
+
+  })();
+  </script>
+</body>
+</html>
